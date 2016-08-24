@@ -74,7 +74,10 @@ length = fromIntegral . natVal . proxy
 -- | Append two tagged 'ByteString's.
 append :: (KnownNat s1, KnownNat s2)
        => ByteString s1 -> ByteString s2 -> ByteString (s1+s2)
-append (ByteString a) (ByteString b) = ByteString (a <> b)
+append (ByteString a) (ByteString b) =
+  -- I really want to use wrap', but I can't make the type machinery work.
+  -- Something about having to be 10% smarter than the tools we use... :(
+  ByteString (a <> b)
 
 proxy :: ByteString sz -> Proxy sz
 proxy _ = Proxy
@@ -85,32 +88,23 @@ fst' = fst
 fastRandBs :: Int -> Gen ByteString.ByteString
 fastRandBs 0 = return ""
 fastRandBs numBytes | numBytes <= 16 = slowRandBs numBytes
-fastRandBs numBytes = do
-  -- I'm not sure that the following is really slower, so try benching again
-  -- when plugged in...
-  --
-  -- seed <- slowRandBs 16 -- 128 bits of random seed
-  -- let stream = LazyByteString.fromChunks $ iterate hashes seed
-  --     trunc  = LazyByteString.take (toEnum numBytes) stream
-  -- return $ LazyByteString.toStrict trunc
-  -- where
-  -- hashes input = hash (32*1024) (ByteString.take 16 input)
+fastRandBs numBytes = hash (8*numBytes) <$> slowRandBs 16
 
   -- this is crappy to read, but seems consistently fast
-  let perChunk = 1024*1024
-  let (rounds, bytes) = numBytes `divMod` perChunk
-  bSeed <- slowRandBs $ 16 -- 16 bytes of "really" random seed
+  -- let perChunk = 1024*1024
+  -- let (rounds, bytes) = numBytes `divMod` perChunk
+  -- bSeed <- slowRandBs $ 16 -- 16 bytes of "really" random seed
 
-  -- Notice the hash (8*) calls; hash always returns an integral number of
-  -- bytes (duh), but it wants its output length in bits. We just always track
-  -- bytes, and multiply by 8 when calling hash.
-  let preChunks = if bytes == 0 then ByteString.empty else hash (8*bytes) bSeed
-  if rounds == 0
-    then return preChunks
-    else do
-      rSeed <- slowRandBs $ 16
-      let hashes = tail $ iterate ( hash (8*perChunk) . ByteString.take 32 ) rSeed
-      return $ ByteString.concat $ preChunks : take rounds hashes
+  -- -- Notice the hash (8*) calls; hash always returns an integral number of
+  -- -- bytes (duh), but it wants its output length in bits. We just always track
+  -- -- bytes, and multiply by 8 when calling hash.
+  -- let preChunks = if bytes == 0 then ByteString.empty else hash (8*bytes) bSeed
+  -- if rounds == 0
+  --   then return preChunks
+  --   else do
+  --     rSeed <- slowRandBs $ 16
+  --     let hashes = tail $ iterate ( hash (8*perChunk) . ByteString.take 32 ) rSeed
+  --     return $ ByteString.concat $ preChunks : take rounds hashes
 
 
 -- | Use choose to generate some "random" Word8 values, and then pack them
