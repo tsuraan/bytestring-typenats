@@ -22,6 +22,7 @@ library
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
                      , binary >= 0.8.3.0
+                     , blake2
                      , bytestring
                      , cereal
                      , cryptohash >= 0.6

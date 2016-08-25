@@ -25,7 +25,8 @@ import qualified Data.Binary.Put as BP
 import qualified Data.Binary.Get as BG
 
 import Control.DeepSeq      ( NFData(..) )
-import Crypto.Hash.Skein512 ( hash )
+-- import Crypto.Hash.Skein512 ( hash )
+import Crypto.Hash.BLAKE2.BLAKE2bp ( hash )
 import Data.Binary          ( Binary(..) )
 import Data.Coerce          ( coerce )
 import Data.Monoid          ( (<>) )
@@ -88,7 +89,7 @@ fst' = fst
 fastRandBs :: Int -> Gen ByteString.ByteString
 fastRandBs 0 = return ""
 fastRandBs numBytes | numBytes <= 16 = slowRandBs numBytes
-fastRandBs numBytes = hash (8*numBytes) <$> slowRandBs 16
+fastRandBs numBytes = hash numBytes "" <$> slowRandBs 16
 
   -- this is crappy to read, but seems consistently fast
   -- let perChunk = 1024*1024
