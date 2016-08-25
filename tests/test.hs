@@ -3,7 +3,7 @@ import Data.ByteString ( ByteString )
 import Test.QuickCheck.Monadic
 import Test.QuickCheck
 
-import Data.ByteString.TypeLits ( fastRandBs, slowRandBs )
+import Data.ByteString.TypeNats ( fastRandBs, slowRandBs )
 
 main :: IO ()
 main = do

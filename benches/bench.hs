@@ -3,7 +3,7 @@ import Test.QuickCheck.Arbitrary
 import Test.QuickCheck.Gen
 import Criterion.Main
 
-import Data.ByteString.TypeLits
+import Data.ByteString.TypeNats
 
 main :: IO ()
 main = defaultMain

@@ -1,13 +1,13 @@
 {-# LANGUAGE DataKinds, KindSignatures, TypeOperators, OverloadedStrings #-}
 -- |
--- Module : Data.ByteString.TypeLits
+-- Module : Data.ByteString.TypeNats
 -- Copyright: Jeremy Groven
 -- License: BSD3
 --
 -- A tiny tagged 'ByteString' wrapper that carries around the size of the
 -- wrapped ByteString. This allows for very simple
 -- serialization/deserialization.
-module Data.ByteString.TypeLits
+module Data.ByteString.TypeNats
 ( ByteString
 , wrap
 , length
