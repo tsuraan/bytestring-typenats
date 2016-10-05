@@ -1,4 +1,5 @@
-{-# LANGUAGE DataKinds, KindSignatures, TypeOperators, OverloadedStrings #-}
+{-# LANGUAGE DataKinds, KindSignatures, TypeOperators, OverloadedStrings,
+             LambdaCase, DeriveDataTypeable #-}
 -- |
 -- Module : Data.ByteString.TypeNats
 -- Copyright: Jeremy Groven
@@ -8,12 +9,16 @@
 -- wrapped ByteString. This allows for very simple
 -- serialization/deserialization.
 module Data.ByteString.TypeNats
-( ByteString
+( ByteString(stripSize)
 , wrap
+, wrap'
+, random
 , length
 , append
 , fastRandBs
 , slowRandBs
+, sizeHelper
+, sizeHelper'
 ) where
 
 import qualified Data.ByteString as ByteString
@@ -29,10 +34,13 @@ import Control.DeepSeq      ( NFData(..) )
 import Crypto.Hash.BLAKE2.BLAKE2bp ( hash )
 import Data.Binary          ( Binary(..) )
 import Data.Coerce          ( coerce )
+import Data.Functor.Identity ( Identity(..) )
 import Data.Monoid          ( (<>) )
 import Data.Proxy           ( Proxy(..) )
 import Data.Serialize       ( Serialize(..) )
 import Data.String          ( IsString(..) )
+import Data.Typeable        ( Typeable )
+import System.Entropy       ( getEntropy )
 import Test.QuickCheck      ( Arbitrary(..), Gen, choose, vectorOf )
 import GHC.TypeLits
 
@@ -42,30 +50,23 @@ import Prelude hiding ( length )
 -- serialization and deserialization of bytestrings that have fixed lengths.
 newtype ByteString (sz :: Nat ) = ByteString
   { stripSize :: ByteString.ByteString }
-  deriving ( Eq, Ord )
+  deriving ( Eq, Ord, Typeable )
 
 -- |Wrap a 'ByteString' with a size tag. Returns 'Just' if the given ByteString
 -- has the desired length, 'Nothing' if it does not.
 wrap :: KnownNat sz => ByteString.ByteString -> Either String (ByteString sz)
-wrap bs =
-  let dummy = undefined
-      r     = wrap' dummy
-  in fst' (r, dummy)
-  where
-  wrap' :: KnownNat sz => ByteString sz -> Either String (ByteString sz)
-  wrap' dummy =
-    let needLen = fromIntegral $ natVal $ proxy dummy
-        gotLen  = ByteString.length bs
-    in if gotLen == needLen
-      then Right $ ByteString bs
-      else Left $ "wrap needed " ++ show needLen ++ " bytes, got " ++ show gotLen
+wrap bs = runIdentity $ sizeHelper (const $ return bs)
 
 -- | Wrap a 'ByteString' with a size tag. Errors out if the given ByteString is
 -- the wrong size, does the wrapping if the size is right.
 wrap' :: KnownNat sz => ByteString.ByteString -> ByteString sz
 wrap' bs = case wrap bs of
-            Right s  -> s
+            Right bs -> bs
             Left err -> error err
+
+-- | Generate a random bytestring using the system's entropy source
+random :: KnownNat sz => IO (ByteString sz)
+random = sizeHelper' getEntropy
 
 -- | Determine the length of a size tagged ByteString. I think this is probably
 -- constant-folded at compile time, since it only uses types.
@@ -86,32 +87,51 @@ proxy _ = Proxy
 fst' :: (a, a) -> a
 fst' = fst
 
+-- | Quickly generate large amounts of pseudo-random data using a few bytes
+-- from the quicktest generator, and then a bunch more bytes from Blake2.
 fastRandBs :: Int -> Gen ByteString.ByteString
 fastRandBs 0 = return ""
 fastRandBs numBytes | numBytes <= 16 = slowRandBs numBytes
 fastRandBs numBytes = hash numBytes "" <$> slowRandBs 16
 
-  -- this is crappy to read, but seems consistently fast
-  -- let perChunk = 1024*1024
-  -- let (rounds, bytes) = numBytes `divMod` perChunk
-  -- bSeed <- slowRandBs $ 16 -- 16 bytes of "really" random seed
-
-  -- -- Notice the hash (8*) calls; hash always returns an integral number of
-  -- -- bytes (duh), but it wants its output length in bits. We just always track
-  -- -- bytes, and multiply by 8 when calling hash.
-  -- let preChunks = if bytes == 0 then ByteString.empty else hash (8*bytes) bSeed
-  -- if rounds == 0
-  --   then return preChunks
-  --   else do
-  --     rSeed <- slowRandBs $ 16
-  --     let hashes = tail $ iterate ( hash (8*perChunk) . ByteString.take 32 ) rSeed
-  --     return $ ByteString.concat $ preChunks : take rounds hashes
-
-
 -- | Use choose to generate some "random" Word8 values, and then pack them
 -- together with ByteString.pack
 slowRandBs :: Int -> Gen ByteString.ByteString
 slowRandBs numBytes = ByteString.pack `fmap` vectorOf numBytes (choose (0, 255))
+
+-- | Generate a ByteString of the desired length. The given callback will be
+-- called with the number of bytes that are indicated by the output's type, and
+-- is expected to return a (standard) ByteString of that length.
+sizeHelper :: (Monad m, KnownNat sz)
+           => (Int -> m ByteString.ByteString)
+           -> m (Either String (ByteString sz))
+sizeHelper fn = do
+  let dummy = undefined
+  r <- helper' fn dummy
+  return $ fst' (r, dummy)
+  where
+  helper' :: (Monad m, KnownNat sz)
+          => (Int -> m ByteString.ByteString)
+          -> ByteString sz
+          -> m (Either String (ByteString sz))
+  helper' fn dummy = do
+    let needLen = fromIntegral $ natVal $ proxy dummy
+    bs <- fn needLen
+    let gotLen  = ByteString.length bs
+    if gotLen == needLen
+      then return $ Right $ ByteString bs
+      else return $ Left $ "Expected " ++ show needLen ++ 
+                      " byte result from callback, but got " ++ show gotLen
+
+-- | Same as sizeHelper, but this does the monad's fail action instead of
+-- returning Left/Right values
+sizeHelper' :: (Monad m, KnownNat sz)
+            => (Int -> m ByteString.ByteString)
+            -> m (ByteString sz)
+sizeHelper' fn =
+  sizeHelper fn >>= \case
+    Right bs -> return bs
+    Left err -> fail err
 
 instance Show (ByteString sz) where
   showsPrec x b = showsPrec x (stripSize b)
@@ -122,10 +142,7 @@ instance KnownNat sz => IsString (ByteString sz) where
 instance KnownNat sz => Serialize (ByteString sz) where
   put (ByteString bs) = SP.putByteString bs
 
-  get = get' undefined
-    where
-    get' :: KnownNat sz => ByteString sz -> SG.Get (ByteString sz)
-    get' dummy = wrap' <$> SG.getByteString (length dummy)
+  get = sizeHelper' SG.getByteString
 
 instance KnownNat sz => Binary (ByteString sz) where
   put (ByteString bs) = BP.putByteString bs
@@ -134,16 +151,11 @@ instance KnownNat sz => Binary (ByteString sz) where
         bs  = ByteString.concat bss
     in BP.putByteString bs
 
-  get = get' undefined
-    where
-    get' :: KnownNat sz => ByteString sz -> BG.Get (ByteString sz)
-    get' dummy = wrap' <$> BG.getByteString (length dummy)
+  get = sizeHelper' BG.getByteString
 
 instance NFData (ByteString sz) where
   rnf (ByteString bs) = rnf bs
 
 instance KnownNat sz => Arbitrary (ByteString sz) where
-  arbitrary = arb' undefined
-    where
-    arb' :: KnownNat sz => ByteString sz -> Gen (ByteString sz)
-    arb' dummy = wrap' `fmap` fastRandBs (length dummy)
+  arbitrary = sizeHelper' fastRandBs
+
