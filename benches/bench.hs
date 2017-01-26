@@ -1,11 +1,14 @@
 {-# LANGUAGE DataKinds #-}
+#ifdef UseArbitrary
 import Test.QuickCheck.Arbitrary
 import Test.QuickCheck.Gen
 import Criterion.Main
 
 import Data.ByteString.TypeNats
+#endif
 
 main :: IO ()
+#ifdef UseArbitrary
 main = defaultMain
   [ bench "arbitrary"    $ nfIO $ action (arbitrary :: Gen (ByteString 10))
   , bench "arbitrary1M"  $ nfIO $ action (arbitrary :: Gen (ByteString 1000000))
@@ -31,3 +34,7 @@ main = defaultMain
     examine :: [a] -> IO ()
     examine [] = return ()
     examine (hd:tl) = hd `seq` examine tl
+#else
+main = putStrLn "Arbitrary disabled; nothing to benchmark"
+#endif
+

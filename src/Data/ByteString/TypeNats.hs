@@ -15,36 +15,47 @@ module Data.ByteString.TypeNats
 , random
 , length
 , append
-, fastRandBs
-, slowRandBs
 , sizeHelper
 , sizeHelper'
+#ifdef UseArbitrary
+, fastRandBs
+, slowRandBs
+#endif
 ) where
 
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as BSC
-import qualified Data.ByteString.Lazy as LazyByteString
-import qualified Data.Serialize.Put as SP
-import qualified Data.Serialize.Get as SG
-import qualified Data.Binary.Put as BP
-import qualified Data.Binary.Get as BG
+-- import qualified Data.ByteString.Lazy as LazyByteString
 
 import Control.DeepSeq      ( NFData(..) )
 -- import Crypto.Hash.Skein512 ( hash )
-import Crypto.Hash.BLAKE2.BLAKE2bp ( hash )
-import Data.Binary          ( Binary(..) )
-import Data.Coerce          ( coerce )
 import Data.Functor.Identity ( Identity(..) )
 import Data.Monoid          ( (<>) )
 import Data.Proxy           ( Proxy(..) )
-import Data.Serialize       ( Serialize(..) )
 import Data.String          ( IsString(..) )
 import Data.Typeable        ( Typeable )
 import System.Entropy       ( getEntropy )
-import Test.QuickCheck      ( Arbitrary(..), Gen, choose, vectorOf )
 import GHC.TypeLits
 
 import Prelude hiding ( length )
+
+#ifdef UseCereal
+import qualified Data.Serialize.Put as SP
+import qualified Data.Serialize.Get as SG
+import Data.Serialize       ( Serialize(..) )
+#endif
+
+#ifdef UseBinary
+import qualified Data.Binary.Put as BP
+import qualified Data.Binary.Get as BG
+import Data.Binary          ( Binary(..) )
+import Data.Coerce          ( coerce )
+#endif
+
+#ifdef UseArbitrary
+import Crypto.Hash.BLAKE2.BLAKE2bp ( hash )
+import Test.QuickCheck      ( Arbitrary(..), Gen, choose, vectorOf )
+#endif
 
 -- | A sized-tagged wrapper around 'ByteString's. Useful when doing a lot of
 -- serialization and deserialization of bytestrings that have fixed lengths.
@@ -61,8 +72,8 @@ wrap bs = runIdentity $ sizeHelper (const $ return bs)
 -- the wrong size, does the wrapping if the size is right.
 wrap' :: KnownNat sz => ByteString.ByteString -> ByteString sz
 wrap' bs = case wrap bs of
-            Right bs -> bs
-            Left err -> error err
+            Right wrapped -> wrapped
+            Left err      -> error err
 
 -- | Generate a random bytestring using the system's entropy source
 random :: KnownNat sz => IO (ByteString sz)
@@ -87,18 +98,6 @@ proxy _ = Proxy
 fst' :: (a, a) -> a
 fst' = fst
 
--- | Quickly generate large amounts of pseudo-random data using a few bytes
--- from the quicktest generator, and then a bunch more bytes from Blake2.
-fastRandBs :: Int -> Gen ByteString.ByteString
-fastRandBs 0 = return ""
-fastRandBs numBytes | numBytes <= 16 = slowRandBs numBytes
-fastRandBs numBytes = hash numBytes "" <$> slowRandBs 16
-
--- | Use choose to generate some "random" Word8 values, and then pack them
--- together with ByteString.pack
-slowRandBs :: Int -> Gen ByteString.ByteString
-slowRandBs numBytes = ByteString.pack `fmap` vectorOf numBytes (choose (0, 255))
-
 -- | Generate a ByteString of the desired length. The given callback will be
 -- called with the number of bytes that are indicated by the output's type, and
 -- is expected to return a (standard) ByteString of that length.
@@ -114,9 +113,9 @@ sizeHelper fn = do
           => (Int -> m ByteString.ByteString)
           -> ByteString sz
           -> m (Either String (ByteString sz))
-  helper' fn dummy = do
+  helper' fn' dummy = do
     let needLen = fromIntegral $ natVal $ proxy dummy
-    bs <- fn needLen
+    bs <- fn' needLen
     let gotLen  = ByteString.length bs
     if gotLen == needLen
       then return $ Right $ ByteString bs
@@ -139,11 +138,17 @@ instance Show (ByteString sz) where
 instance KnownNat sz => IsString (ByteString sz) where
   fromString = wrap' . BSC.pack
 
+instance NFData (ByteString sz) where
+  rnf (ByteString bs) = rnf bs
+
+#ifdef UseCereal
 instance KnownNat sz => Serialize (ByteString sz) where
   put (ByteString bs) = SP.putByteString bs
 
   get = sizeHelper' SG.getByteString
+#endif
 
+#ifdef UseBinary
 instance KnownNat sz => Binary (ByteString sz) where
   put (ByteString bs) = BP.putByteString bs
   putList sbss =
@@ -152,10 +157,22 @@ instance KnownNat sz => Binary (ByteString sz) where
     in BP.putByteString bs
 
   get = sizeHelper' BG.getByteString
+#endif
 
-instance NFData (ByteString sz) where
-  rnf (ByteString bs) = rnf bs
+#ifdef UseArbitrary
+-- | Quickly generate large amounts of pseudo-random data using a few bytes
+-- from the quicktest generator, and then a bunch more bytes from Blake2.
+fastRandBs :: Int -> Gen ByteString.ByteString
+fastRandBs 0 = return ""
+fastRandBs numBytes | numBytes <= 16 = slowRandBs numBytes
+fastRandBs numBytes = hash numBytes "" <$> slowRandBs 16
+
+-- | Use choose to generate some "random" Word8 values, and then pack them
+-- together with ByteString.pack
+slowRandBs :: Int -> Gen ByteString.ByteString
+slowRandBs numBytes = ByteString.pack `fmap` vectorOf numBytes (choose (0, 255))
 
 instance KnownNat sz => Arbitrary (ByteString sz) where
   arbitrary = sizeHelper' fastRandBs
+#endif
 
